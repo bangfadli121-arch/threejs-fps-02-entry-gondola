@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GONDOLA — 5v5 plant-and-defuse at the Summit cable-car station</title>
+<style>
+  /* GONDOLA look: bright alpine noon — snow white, steel blue, safety orange,
+     warm wood. Every panel is a light card over the bright 3D scene. */
+  :root {
+    --ink: #1d2733;
+    --ink-soft: #3c4a5a;
+    --muted: #5d6b7a;
+    --paper: rgba(255, 255, 255, 0.92);
+    --paper-solid: #ffffff;
+    --line: rgba(29, 39, 51, 0.16);
+    --steel: #2f6db3;
+    --steel-dark: #27435f;
+    --orange: #ff7a1a;
+    --red: #e5322d;
+    --green: #2e8b57;
+    --radius: 8px;
+    --font-ui: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-readout: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: #8ec8ee; color: var(--ink); font-family: var(--font-ui);
+  }
+  #game, #game canvas { position: fixed; inset: 0; display: block; }
+  #hud { position: fixed; inset: 0; pointer-events: none; }
+  .hidden { display: none !important; }
+
+  /* --- crosshair: gap grows with spread (set from JS as --gap). --- */
+  #crosshair { position: fixed; left: 50%; top: 50%; width: 0; height: 0; --gap: 6px; }
+  #crosshair i { position: absolute; background: #fff; box-shadow: 0 0 3px rgba(0,0,0,.7); }
+  #crosshair i:nth-child(1) { left: -1px; top: calc(-1 * var(--gap) - 8px); width: 2px; height: 8px; }
+  #crosshair i:nth-child(2) { left: -1px; top: var(--gap); width: 2px; height: 8px; }
+  #crosshair i:nth-child(3) { top: -1px; left: calc(-1 * var(--gap) - 8px); height: 2px; width: 8px; }
+  #crosshair i:nth-child(4) { top: -1px; left: var(--gap); height: 2px; width: 8px; }
+  #crosshair::after { content: ''; position: absolute; left: -1px; top: -1px; width: 2px; height: 2px; background: #fff; box-shadow: 0 0 3px rgba(0,0,0,.7); }
+  #hitmarker { position: fixed; left: 50%; top: 50%; width: 26px; height: 26px; transform: translate(-50%, -50%) rotate(45deg); opacity: 0; }
+  #hitmarker.on { opacity: 1; }
+  #hitmarker.head i { background: var(--red); }
+  #hitmarker i { position: absolute; background: var(--orange); box-shadow: 0 0 3px rgba(0,0,0,.6); }
+  #hitmarker i:nth-child(1) { left: 12px; top: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(2) { left: 12px; bottom: 0; width: 2px; height: 8px; }
+  #hitmarker i:nth-child(3) { top: 12px; left: 0; height: 2px; width: 8px; }
+  #hitmarker i:nth-child(4) { top: 12px; right: 0; height: 2px; width: 8px; }
+  #dmgdir {
+    position: fixed; left: 50%; top: 50%; width: 120px; height: 120px; margin: -60px 0 0 -60px;
+    border: 3px solid transparent; border-top-color: var(--red); border-radius: 50%;
+    opacity: 0; pointer-events: none;
+  }
+  #dmgdir.on { animation: dmgfade 0.9s ease-out forwards; }
+  @keyframes dmgfade { 0% { opacity: .95; } 100% { opacity: 0; } }
+
+  /* --- bottom-left: health + armor. --- */
+  #vitals { position: fixed; left: 24px; bottom: 22px; width: 230px; }
+  .vital-row { display: flex; align-items: baseline; gap: 8px; margin-top: 6px; }
+  .vital-label { font-size: 11px; letter-spacing: .12em; color: var(--ink-soft); width: 52px; }
+  .vital-num { font-family: var(--font-readout); font-size: 30px; font-weight: 700; line-height: 1; }
+  .bar { flex: 1; height: 8px; background: rgba(255,255,255,.65); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--green); transition: width .15s linear; }
+  #armor-bar { background: var(--steel); }
+  #score-line { margin-top: 10px; font-family: var(--font-readout); font-size: 13px; color: var(--ink-soft); }
+  #score-line b { color: var(--ink); }
+
+  /* --- bottom-right: ammo + money. --- */
+  #ammo-box { position: fixed; right: 28px; bottom: 22px; text-align: right; }
+  #ammo { font-family: var(--font-readout); font-size: 54px; line-height: 1; font-weight: 700; color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.45); }
+  #ammo.empty #ammo-mag { color: var(--orange); }
+  #ammo-reserve { font-size: 17px; color: rgba(255,255,255,.85); }
+  #weapon-name { font-size: 13px; letter-spacing: .08em; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.5); margin-top: 2px; }
+  #money { font-family: var(--font-readout); font-size: 22px; font-weight: 700; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.5); margin-top: 6px; }
+  #money::before { content: '◆ '; color: var(--orange); }
+
+  /* --- top-centre: round timer + score. --- */
+  #topbar { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); text-align: center; }
+  #timer {
+    display: inline-block; font-family: var(--font-readout); font-size: 30px; font-weight: 700;
+    background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 4px 18px; box-shadow: 0 2px 10px rgba(20,40,60,.18);
+  }
+  #timer.buy { color: var(--steel); }
+  #timer.bomb { color: #fff; background: var(--red); border-color: var(--red); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: .55; } }
+  #scoreboard-mini { margin-top: 6px; font-family: var(--font-readout); font-size: 15px; font-weight: 700; }
+  #scoreboard-mini .atk { color: var(--orange); }
+  #scoreboard-mini .def { color: var(--steel); }
+  #round-label { font-size: 11px; letter-spacing: .18em; color: var(--ink-soft); margin-top: 2px; }
+  #plan { margin-top: 4px; font-size: 12px; font-weight: 700; letter-spacing: .06em; color: var(--steel-dark); }
+  #bomb-status { margin-top: 4px; font-size: 13px; font-weight: 700; }
+  #bomb-status.carry { color: var(--orange); }
+  #bomb-status.planted { color: var(--red); }
+  #bomb-status.dropped { color: var(--ink-soft); }
+
+  /* --- top-left: radio + kill feed. --- */
+  #radio { position: fixed; left: 24px; top: 18px; width: 340px; font-size: 13px; }
+  .radio-line { background: var(--paper); border-left: 3px solid var(--steel); padding: 5px 9px; margin-bottom: 4px; border-radius: 0 var(--radius) var(--radius) 0; box-shadow: 0 1px 6px rgba(20,40,60,.15); }
+  .radio-line.warn { border-left-color: var(--red); font-weight: 700; }
+  .radio-line.warden { border-left-color: var(--red); background: #fff0ee; font-weight: 700; }
+  #feed { position: fixed; left: 24px; top: 150px; width: 340px; font-size: 12px; color: var(--ink-soft); }
+  .feed-line { padding: 2px 4px; text-shadow: 0 1px 2px rgba(255,255,255,.8); }
+  .feed-line.warden { color: var(--red); font-weight: 700; }
+
+  /* --- top-right: GONDOLA tracker + minimap. --- */
+  #right-panel { position: fixed; right: 24px; top: 18px; width: 240px; }
+  #tracker {
+    background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 10px 12px; box-shadow: 0 2px 10px rgba(20,40,60,.15);
+  }
+  #tracker-title { font-size: 11px; letter-spacing: .18em; font-weight: 700; color: var(--steel-dark); }
+  #tracker-line { position: relative; height: 8px; margin: 12px 4px 6px; background: linear-gradient(90deg, var(--steel), #9fc6e8, var(--steel)); border-radius: 4px; }
+  #tracker-line::before, #tracker-line::after {
+    content: ''; position: absolute; top: -4px; width: 12px; height: 16px; background: var(--steel-dark); border-radius: 2px;
+  }
+  #tracker-line::before { left: -4px; }
+  #tracker-line::after { right: -4px; }
+  #tracker-cabin {
+    position: absolute; top: -7px; left: 4%; width: 16px; height: 22px; margin-left: -8px;
+    background: var(--orange); border: 2px solid #fff; border-radius: 4px;
+    box-shadow: 0 1px 5px rgba(0,0,0,.4); transition: left .3s linear;
+  }
+  #tracker-cabin.transit { animation: bob .5s ease-in-out infinite alternate; }
+  @keyframes bob { from { top: -8px; } to { top: -5px; } }
+  #tracker-label { font-size: 12px; font-weight: 700; }
+  #tracker-count { font-size: 11px; color: var(--muted); font-family: var(--font-readout); }
+  #tracker-stations { display: flex; justify-content: space-between; font-size: 10px; letter-spacing: .1em; color: var(--muted); }
+  #minimap {
+    margin-top: 10px; width: 240px; height: 240px; border: 1px solid var(--line);
+    border-radius: var(--radius); background: #eef4f8; box-shadow: 0 2px 10px rgba(20,40,60,.15);
+  }
+
+  /* --- title mode: hide the in-game vitals/ammo/crosshair on the cover. --- */
+  body.title-mode #vitals, body.title-mode #ammo-box, body.title-mode #crosshair,
+  body.title-mode #hitmarker, body.title-mode #dmgdir { display: none; }
+
+  /* --- centre: banner, plant bar, hint, toast. --- */
+  #banner {
+    position: fixed; left: 50%; top: 26%; transform: translate(-50%, -50%) scale(.96);
+    text-align: center; opacity: 0; transition: opacity .25s ease, transform .25s ease; pointer-events: none;
+  }
+  #banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #banner-main {
+    display: inline-block; font-size: 42px; font-weight: 800; letter-spacing: .02em;
+    background: var(--paper-solid); border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 28px; box-shadow: 0 6px 24px rgba(20,40,60,.25);
+  }
+  #banner-sub { margin-top: 8px; font-size: 15px; color: #fff; text-shadow: 0 1px 5px rgba(0,0,0,.6); font-weight: 600; }
+  #banner.warden #banner-main { background: #fff0ee; color: var(--red); border-color: var(--red); }
+  #banner.lose #banner-main { background: #fff0ee; }
+  #plant-bar {
+    position: fixed; left: 50%; top: 58%; transform: translateX(-50%); width: 260px;
+    background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 8px 12px;
+  }
+  #plant-bar .track { height: 10px; background: #dbe4ec; border-radius: 5px; overflow: hidden; margin-top: 4px; }
+  #plant-bar .track i { display: block; height: 100%; background: var(--orange); width: 0; }
+  #plant-bar span { font-size: 12px; font-weight: 700; letter-spacing: .1em; }
+  #hint { position: fixed; left: 50%; top: 64%; transform: translateX(-50%); font-size: 15px; font-weight: 700; color: #fff; text-shadow: 0 1px 5px rgba(0,0,0,.65); }
+  #toast {
+    position: fixed; left: 50%; bottom: 150px; transform: translateX(-50%);
+    font-size: 13px; font-weight: 700; background: var(--paper); padding: 6px 14px; border-radius: 20px;
+    opacity: 0; transition: opacity .2s;
+  }
+  #toast.on { opacity: 1; }
+
+  /* --- buy menu. --- */
+  #buy {
+    position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: min(620px, 94vw); background: var(--paper-solid); border: 1px solid var(--line);
+    border-radius: 12px; box-shadow: 0 12px 40px rgba(20,40,60,.3); padding: 22px 24px;
+    pointer-events: auto;
+  }
+  #buy h2 { margin: 0 0 2px; font-size: 24px; }
+  #buy .sub { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  #buy-money { font-family: var(--font-readout); font-size: 20px; font-weight: 700; color: var(--steel-dark); }
+  .buy-row {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    font: inherit; background: #f4f8fb; border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 9px 12px; margin-bottom: 6px; cursor: pointer;
+  }
+  .buy-row:hover { background: #e6f0f9; border-color: var(--steel); }
+  .buy-key { font-family: var(--font-readout); font-size: 12px; font-weight: 700; color: #fff; background: var(--steel); border-radius: 4px; padding: 2px 7px; }
+  .buy-name { font-weight: 700; }
+  .buy-blurb { flex: 1; color: var(--muted); font-size: 12px; }
+  .buy-price { font-family: var(--font-readout); font-weight: 700; color: var(--steel-dark); }
+  #buy-msg { min-height: 18px; font-size: 13px; color: var(--steel-dark); margin-top: 6px; }
+  #buy-schedule { margin-top: 10px; font-size: 12px; font-weight: 700; color: var(--orange); border-top: 1px dashed var(--line); padding-top: 10px; }
+  #buy .close-hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+  /* --- title screen: the cover. Big GONDOLA, bright valley behind. --- */
+  #title {
+    position: fixed; inset: 0; display: flex; align-items: center; pointer-events: auto;
+    background: linear-gradient(90deg, rgba(255,255,255,.88) 0%, rgba(255,255,255,.55) 42%, rgba(255,255,255,0) 70%);
+  }
+  #title .panel { padding: 40px; max-width: 560px; }
+  #title .kicker { font-size: 13px; letter-spacing: .28em; font-weight: 700; color: var(--steel); }
+  #title h1 { margin: 8px 0 4px; font-size: 96px; line-height: .9; font-weight: 900; letter-spacing: -0.02em; color: var(--ink); }
+  #title h1 span { color: var(--orange); }
+  #title .tag { font-size: 19px; line-height: 1.4; color: var(--ink-soft); max-width: 46ch; }
+  #title .tag b { color: var(--ink); }
+  #play-btn, #how-btn {
+    font: inherit; font-size: 17px; font-weight: 700; padding: 13px 26px; border-radius: 10px;
+    cursor: pointer; border: 1px solid var(--orange); margin-top: 18px;
+  }
+  #play-btn { background: var(--orange); color: #fff; box-shadow: 0 4px 16px rgba(255,122,26,.45); }
+  #play-btn:hover { background: #f06a00; }
+  #how-btn { background: #fff; color: var(--steel-dark); border-color: var(--steel); margin-left: 10px; }
+  #how-panel { margin-top: 16px; font-size: 14px; line-height: 1.65; color: var(--ink-soft); background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  #how-panel kbd { font-family: var(--font-readout); font-size: 12px; background: #eef2f6; border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+
+  /* --- halftime / scoreboard / results: light cards, full tables. --- */
+  .screen {
+    position: fixed; inset: 0; display: grid; place-items: center; pointer-events: auto;
+    background: rgba(240, 246, 251, 0.82);
+  }
+  .screen .card {
+    width: min(640px, 94vw); background: var(--paper-solid); border: 1px solid var(--line);
+    border-radius: 14px; box-shadow: 0 12px 40px rgba(20,40,60,.3); padding: 28px 32px;
+  }
+  .screen h2 { margin: 0 0 4px; font-size: 40px; font-weight: 900; }
+  .screen .score-big { font-family: var(--font-readout); font-size: 22px; font-weight: 700; margin-bottom: 14px; }
+  table.score { width: 100%; border-collapse: collapse; font-size: 14px; }
+  table.score th, table.score td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #edf1f5; }
+  table.score th { font-size: 11px; letter-spacing: .12em; color: var(--muted); }
+  table.score tr.me td { font-weight: 700; background: #fff4ea; }
+  table.score tr.warden td { color: var(--red); }
+  .screen .foot { margin-top: 16px; font-size: 14px; color: var(--ink-soft); }
+  .screen .foot b { color: var(--ink); }
+  #results-title { font-size: 52px; }
+  #deathcam {
+    position: fixed; left: 50%; bottom: 110px; transform: translateX(-50%);
+    background: rgba(29,39,51,.85); color: #fff; font-size: 14px; font-weight: 700;
+    padding: 8px 18px; border-radius: 20px;
+  }
+  #flash-overlay { position: fixed; inset: 0; background: #fff; opacity: 0; transition: opacity 1.2s ease; pointer-events: none; }
+  #scoreboard { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(240,246,251,.7); pointer-events: none; }
+  #scoreboard .card { width: min(560px, 92vw); }
+</style>
+</head>
+<body>
+<div id="game"></div>
+
+<div id="hud" aria-hidden="true">
+  <div id="crosshair"><i></i><i></i><i></i><i></i></div>
+  <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+  <div id="dmgdir"></div>
+
+  <div id="vitals">
+    <div class="vital-row"><span class="vital-label">HEALTH</span><span class="vital-num" id="health-num">100</span><span class="bar"><i id="hp-bar" style="width:100%"></i></span></div>
+    <div class="vital-row"><span class="vital-label">ARMOR</span><span class="vital-num" id="armor-num" style="font-size:20px">0</span><span class="bar"><i id="armor-bar" style="width:0%"></i></span></div>
+    <div id="score-line">K <b id="kills">0</b> · D <b id="deaths">0</b></div>
+  </div>
+
+  <div id="ammo-box">
+    <div id="ammo"><span id="ammo-mag">12</span><span id="ammo-reserve">/ 36</span></div>
+    <div id="weapon-name">P9 Sidearm</div>
+    <div id="money">$800</div>
+  </div>
+
+  <div id="topbar">
+    <div id="timer">1:45</div>
+    <div id="scoreboard-mini"><span class="atk">ATK <span id="score-atk">0</span></span> — <span class="def"><span id="score-def">0</span> DEF</span></div>
+    <div id="round-label">ROUND 1 / 15</div>
+    <div id="plan"></div>
+    <div id="bomb-status"></div>
+  </div>
+
+  <div id="radio"></div>
+  <div id="feed"></div>
+
+  <div id="right-panel">
+    <div id="tracker">
+      <div id="tracker-title">🚡 GONDOLA TRACKER</div>
+      <div id="tracker-line"><div id="tracker-cabin"></div></div>
+      <div id="tracker-stations"><span>▲ SUMMIT</span><span>▼ VALLEY</span></div>
+      <div id="tracker-label">DOCKED — SUMMIT · departs in 15s</div>
+      <div id="tracker-count">Departs in 15s</div>
+    </div>
+    <canvas id="minimap" width="240" height="240"></canvas>
+  </div>
+
+  <div id="banner"><div id="banner-main"></div><div id="banner-sub"></div></div>
+  <div id="plant-bar" style="display:none"><span>PLANTING…</span><div class="track"><i></i></div></div>
+  <div id="hint"></div>
+  <div id="toast"></div>
+  <div id="deathcam" class="hidden"><span id="deathcam-text"></span></div>
+  <div id="flash-overlay"></div>
+</div>
+
+<div id="buy" class="hidden">
+  <h2>Buy Menu <span id="buy-money">$800</span></h2>
+  <div class="sub">Press B or click to close · Keys 1–8 buy · Buy phase only</div>
+  <div id="buy-items"></div>
+  <div id="buy-msg"></div>
+  <div id="buy-schedule"></div>
+  <div class="close-hint">Tip: plant inside the gondola cabin — buy a smoke to cover the door.</div>
+</div>
+
+<div id="title">
+  <div class="panel">
+    <div class="kicker">5V5 · PLANT &amp; DEFUSE · THE BOMB SITE MOVES</div>
+    <h1>GON<span>DOLA</span></h1>
+    <p class="tag">A tactical FPS at the <b>Summit cable-car station</b>. One bomb site — a glass
+      gondola cabin riding the cable between Summit and Valley. <b>Plant and defuse only
+      inside the cabin.</b> Time the ride, hold the dock, win the round.</p>
+    <button id="play-btn" type="button">▶ Play — board the gondola</button>
+    <button id="how-btn" type="button">How to play</button>
+    <div id="how-panel" class="hidden">
+      <b>W A S D</b> move · <b>Mouse</b> look · <b>Click</b> fire · <b>R</b> reload ·
+      <b>Ctrl</b> crouch · <b>Space</b> jump · <b>Shift</b> walk quietly ·
+      <b>1 / 2</b> weapons · <b>3</b> smoke · <b>4</b> flash · <b>E</b> (hold) plant / defuse inside the cabin ·
+      <b>B</b> buy menu · <b>Tab</b> scoreboard · <b>M</b> mute<br>
+      Rounds 5, 10 and 15 bring <b>THE WARDEN</b> — 250 HP, LMG, $500 bounty.
+      The cabin dwells 15 s, then rides 12 s to the other station. Watch the tracker.
+    </div>
+  </div>
+</div>
+
+<div id="halftime" class="screen hidden">
+  <div class="card">
+    <h2>HALFTIME</h2>
+    <div class="score-big" id="halftime-score"></div>
+    <table class="score"><thead><tr><th>PLAYER</th><th>SIDE</th><th>K</th><th>D</th><th>MONEY</th></tr></thead><tbody id="halftime-table"></tbody></table>
+    <div class="foot">Sides swap now — attackers become defenders. The cabin keeps running.</div>
+  </div>
+</div>
+
+<div id="results" class="screen hidden">
+  <div class="card">
+    <h2 id="results-title">VICTORY — GONDOLA</h2>
+    <div class="score-big" id="results-score"></div>
+    <div class="foot" id="results-you" style="margin:0 0 12px"></div>
+    <table class="score"><thead><tr><th>PLAYER</th><th>SIDE</th><th>K</th><th>D</th><th>MONEY</th></tr></thead><tbody id="results-table"></tbody></table>
+    <div class="foot">The cable keeps running. Press <b>R</b> — <b>Play again (R)</b> — for another match.</div>
+  </div>
+</div>
+
+<div id="scoreboard" class="hidden">
+  <div class="card">
+    <h2 style="font-size:26px">Scoreboard</h2>
+    <div class="score-big" id="scoreboard-score" style="font-size:16px"></div>
+    <table class="score"><thead><tr><th>PLAYER</th><th>SIDE</th><th>K</th><th>D</th><th>MONEY</th></tr></thead><tbody id="scoreboard-table"></tbody></table>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js"
+  }
+}
+</script>
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
